@@ -1,7 +1,9 @@
 package htmx_test
 
 import (
+	"go.llib.dev/htmx"
 	"html/template"
+	"net/http"
 	"testing"
 )
 
@@ -38,7 +40,41 @@ const exampleTemplate = `
 
 `
 
-func Test_spike(t *testing.T) {
-	tmpl := template.New("page")
-	_ = tmpl
+const editformTemplate = `
+{{ editform ".Ent" }}"
+`
+
+const editformTemplateExpected = `
+<form hx-post="/htmx/my-ent/{{ .ID }}" hx-swap="outerHTML">
+  <input type="hidden" name="id" value="{{ .ID }}">
+  <label for="foo">Foo:</label>
+  <input type="text" name="foo" value="{{ .Foo }}" required>
+  <br>
+  <label for="bar">Bar:</label>
+  <input type="number" name="bar" value="{{ .Bar }}" required>
+  <br>
+  <button type="submit">Save Changes</button>
+</form>
+`
+
+func TestHTMX_EditForm(t *testing.T) {
+	var (
+		mux  = http.NewServeMux()
+		tmpl = template.New("page")
+	)
+
+	hx := &htmx.HTMX{}
+	htmx.Register[MyEntity](hx, "my-ent")
+	tmpl = hx.Apply(tmpl)
+	hx.Mount(mux)
+
+	var ent = MyEntity{
+		ID:  "42",
+		Foo: "foo",
+		Bar: 42,
+		Baz: true,
+	}
+
+	type Data struct{ Ent MyEntity }
+	ExecuteTemplate(t, tmpl, Data{Ent: ent})
 }

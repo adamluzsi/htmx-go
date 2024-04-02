@@ -2,9 +2,147 @@ package htmx
 
 import (
 	"bytes"
+	"go.llib.dev/frameless/pkg/pathkit"
+	"go.llib.dev/frameless/pkg/reflectkit"
 	"go.llib.dev/frameless/pkg/zerokit"
 	"html/template"
+	"net/http"
+	"reflect"
+	"sync"
 )
+
+func New() *HTMX { return &HTMX{} }
+
+type HTMX struct {
+	// Version of HTMX
+	Version string `pattern:"^\\d+\\.\\d+\\.\\d+$"`
+	// SourceURL is the url where the htmx js suppose to be available.
+	// If left empty, then unpack.com will be used as the source.
+	SourceURL string `is:"url"`
+
+	// MountPoint is the Mount MountPoint where the HTMX.Handler is supposed to be mounted.
+	// The template helpers use this heavily to
+	//
+	// default: /htmx
+	MountPoint string
+
+	once     sync.Once
+	registry []regrec
+}
+
+type httpServeMux interface {
+	Handle(pattern string, handler http.Handler)
+}
+
+func Register[T any](hx *HTMX, id conststring) {
+	hx.register(reflectkit.TypeOf[T](), string(id))
+
+}
+
+func (hx *HTMX) Apply(tmpl *template.Template) *template.Template {
+	tmpl = tmpl.Funcs(hx.Funcs())
+	return tmpl
+}
+
+func (hx *HTMX) sourceURL() string {
+	if zerokit.IsZero(hx.SourceURL) {
+		return unpackURL(hx.Version)
+	}
+	return hx.SourceURL
+}
+
+func (hx *HTMX) helperFormFor(Entity any) *template.Template {
+	tmpl := template.New("hx-form")
+
+	return tmpl
+}
+
+const scriptTemplateText = `<script 
+	type="text/javascript" 
+	src="{{.Source}}"
+	crossorigin="anonymous"
+{{ if .Integrity }}
+	integrity="{{.Integrity}}"
+{{ end }}
+></script>
+`
+
+var scriptTemplate = template.Must(
+	template.New("script-source").
+		Parse(scriptTemplateText))
+
+var integrity = map[string] /* src */ string /* integrity hash */ {}
+
+func (hx *HTMX) htmxScriptHTML() (template.HTML, error) {
+	type Data struct {
+		Source    string
+		Integrity string
+	}
+	src := hx.sourceURL()
+	var data = Data{
+		Source:    src,
+		Integrity: integrity[src],
+	}
+	var buf bytes.Buffer
+	err := scriptTemplate.Execute(&buf, data)
+	return template.HTML(buf.String()), err
+}
+
+func (hx *HTMX) Funcs() map[string]any {
+	return map[string]any{
+		"htmx": hx.htmxScriptHTML,
+	}
+}
+
+type regrec struct {
+	Type reflect.Type
+	ID   string
+}
+
+func (hx *HTMX) register(typ reflect.Type, id string) {
+	hx.init()
+	hx.registry = append(hx.registry, regrec{
+		Type: typ,
+		ID:   id,
+	})
+}
+
+func (hx *HTMX) init() {
+	hx.once.Do(func() {
+		hx.registry = make([]regrec, 0)
+	})
+}
+
+func (hx *HTMX) EditForm(v any, opts ...string) {
+
+}
+
+func (hx *HTMX) getMountPoint() string {
+	const defaultMountPoint = "/htmx"
+	return pathkit.Clean(zerokit.Coalesce(hx.MountPoint, defaultMountPoint))
+}
+
+func (hx *HTMX) Mount(mux httpServeMux) {
+	mux.Handle(hx.getMountPoint(), hx.Handler())
+}
+
+func (hx *HTMX) Handler() http.Handler {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		part, path := pathkit.Unshift(r.URL.Path)
+		if pathkit.Canonical(part) == pathkit.Canonical(hx.MountPoint) {
+			part, path = pathkit.Unshift(path)
+		}
+
+		for typ, reg := range hx.registry {
+
+		}
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.StripPrefix(hx.getMountPoint(), handler).ServeHTTP(w, r)
+	})
+}
+
+type conststring string
 
 type Attributes struct {
 	// Get Issues a GET request to the given URL
@@ -70,73 +208,4 @@ type Attributes struct {
 	Trigger string `htmx:"hx-trigger"`
 	// Vals add values to submit with the request (JSON format)
 	Vals string `htmx:"hx-vals"`
-}
-
-func New() *HTMX {
-	return &HTMX{}
-}
-
-type HTMX struct {
-	// Version of HTMX
-	Version string `pattern:"^\\d+\\.\\d+\\.\\d+$"`
-	Source  string `is:"url"`
-}
-
-type stdTemplate interface {
-	Funcs(funcMap map[string]any) stdTemplate
-}
-
-func (hx *HTMX) Apply(tmpl *template.Template) *template.Template {
-	tmpl = tmpl.Funcs(hx.Funcs())
-	return tmpl
-}
-
-func (hx *HTMX) sourceURL() string {
-	if zerokit.IsZero(hx.Source) {
-		return unpackURL(hx.Version)
-	}
-	return hx.Source
-}
-
-func (hx *HTMX) helperFormFor(Entity any) *template.Template {
-	tmpl := template.New("hx-form")
-
-	return tmpl
-}
-
-const scriptTemplateText = `<script 
-	type="text/javascript" 
-	src="{{.Source}}"
-	crossorigin="anonymous"
-{{ if .Integrity }}
-	integrity="{{.Integrity}}"
-{{ end }}
-></script>
-`
-
-var scriptTemplate = template.Must(
-	template.New("script-source").
-		Parse(scriptTemplateText))
-
-var integrity = map[string] /* src */ string /* integrity hash */ {}
-
-func (hx *HTMX) htmxScriptHTML() (template.HTML, error) {
-	type Data struct {
-		Source    string
-		Integrity string
-	}
-	src := hx.sourceURL()
-	var data = Data{
-		Source:    src,
-		Integrity: integrity[src],
-	}
-	var buf bytes.Buffer
-	err := scriptTemplate.Execute(&buf, data)
-	return template.HTML(buf.String()), err
-}
-
-func (hx *HTMX) Funcs() map[string]any {
-	return map[string]any{
-		"htmx": hx.htmxScriptHTML,
-	}
 }
